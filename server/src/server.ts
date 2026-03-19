@@ -44,6 +44,31 @@ async function startServer() {
     next();
   });
 
+  const publicApiKey = process.env.PUBLIC_API_KEY || '';
+  const publicRoutes = new Set(['/health', '/']);
+
+  app.use((req, res, next) => {
+    if (!publicApiKey || publicRoutes.has(req.path)) {
+      next();
+      return;
+    }
+
+    const authHeader = req.header('authorization') || '';
+    const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    const headerKey = req.header('x-api-key')?.trim() || '';
+    const providedKey = bearer || headerKey;
+
+    if (providedKey !== publicApiKey) {
+      res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Valid PUBLIC_API_KEY required via Authorization: Bearer <key> or X-API-Key header.'
+      });
+      return;
+    }
+
+    next();
+  });
+
   // CORS
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -113,6 +138,10 @@ async function startServer() {
   app.use('/a2a/seller', sellerRouter.getRouter());
 
   // Root endpoint - list available agents
+  // Root endpoint - list available agents
+  // NOTE: when PUBLIC_API_KEY is set, downstream callers should send either:
+  // - Authorization: Bearer <PUBLIC_API_KEY>
+  // - X-API-Key: <PUBLIC_API_KEY>
   app.get('/', (req, res) => {
     const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
     const host = req.get('x-forwarded-host') || req.get('host') || `localhost:${config.port}`;
