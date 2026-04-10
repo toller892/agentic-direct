@@ -64,46 +64,56 @@ function detectIntent(message: string): string {
   return 'unknown';
 }
 
-function handleIntent(message: string): { type: string; message: string; data: any; recommendation?: string } {
+function handleIntent(message: string, role: 'buyer' | 'seller'): { type: string; message: string; data: any; recommendation?: string } {
   const intent = detectIntent(message);
+  const roleLabel = role === 'buyer' ? '买家' : '卖家';
   switch (intent) {
-    case 'hello':
-      return { type: 'greeting', message: '你好！我是广告投放助手\n\n我可以帮你：\n- 查看可用广告位\n- 推荐广告套餐\n- 查询价格和预算\n- 创建投放订单\n\n请问有什么可以帮你的？', data: null };
+    case 'hello': {
+      const buyerGreeting = '你好！我是广告投放助手（买家端）\n\n我可以帮你：\n- 查看可购买的广告位\n- 推荐广告套餐\n- 查询价格和预算\n- 创建投放订单\n\n请问有什么可以帮你的？';
+      const sellerGreeting = '你好！我是广告库存助手（卖家端）\n\n我可以帮你：\n- 查看可售卖的广告位库存\n- 管理广告位定价\n- 查看广告主需求\n- 确认订单排期\n\n请问有什么可以帮你的？';
+      return { type: 'greeting', message: role === 'buyer' ? buyerGreeting : sellerGreeting, data: null };
+    }
     case 'listProducts':
-      return { type: 'product_list', message: `我们目前有 ${productCatalog.length} 个广告位可投放：`, data: productCatalog };
+      return { type: 'product_list', message: `【${roleLabel}视角】我们目前有 ${productCatalog.length} 个广告位可投放：`, data: productCatalog };
     case 'phoneAd':
     case 'mobile': {
       const mobileProducts = productCatalog.filter(p => p.category === 'mobile' || p.type === 'splash' || p.description.includes('App'));
-      return { type: 'product_list', message: '为你推荐移动端广告位：', data: mobileProducts, recommendation: '手机广告推荐：App开屏广告 曝光量大，适合品牌推广' };
+      return { type: 'product_list', message: `【${roleLabel}视角】为你推荐移动端广告位：`, data: mobileProducts, recommendation: '手机广告推荐：App开屏广告 曝光量大，适合品牌推广' };
     }
     case 'video': {
       const videoProducts = productCatalog.filter(p => p.category === 'video');
-      return { type: 'product_list', message: '视频类广告位：', data: videoProducts };
+      return { type: 'product_list', message: `【${roleLabel}视角】视频类广告位：`, data: videoProducts };
     }
     case 'display': {
       const displayProducts = productCatalog.filter(p => p.category === 'display');
-      return { type: 'product_list', message: '展示类广告位：', data: displayProducts };
+      return { type: 'product_list', message: `【${roleLabel}视角】展示类广告位：`, data: displayProducts };
     }
     case 'search': {
       const searchProducts = productCatalog.filter(p => p.category === 'search');
-      return { type: 'product_list', message: '搜索类广告位：', data: searchProducts };
+      return { type: 'product_list', message: `【${roleLabel}视角】搜索类广告位：`, data: searchProducts };
     }
     case 'social': {
       const socialProducts = productCatalog.filter(p => p.category === 'social');
-      return { type: 'product_list', message: '社交类广告位：', data: socialProducts };
+      return { type: 'product_list', message: `【${roleLabel}视角】社交类广告位：`, data: socialProducts };
     }
     case 'ecommerce': {
       const ecommerceProducts = productCatalog.filter(p => p.category === 'ecommerce');
-      return { type: 'product_list', message: '电商类广告位：', data: ecommerceProducts };
+      return { type: 'product_list', message: `【${roleLabel}视角】电商类广告位：`, data: ecommerceProducts };
     }
     case 'campaign':
-      return { type: 'campaign_list', message: '推荐广告套餐：', data: campaignTemplates.map(t => ({ ...t, products: t.products.map((pid: string) => { const p = productCatalog.find(x => x.id === pid); return p ? { id: p.id, name: p.name, rate: p.rate } : null; }).filter(Boolean) })) };
-    case 'price':
-      return { type: 'price_info', message: '价格说明：\n\n- 展示类（CPM）：¥25-150 / 千次曝光\n- 点击类（CPC）：¥5 / 次点击\n- 按条计费：短信 ¥0.1/条\n- 包段计费：微信推文 ¥200/篇\n\n批量投放可享受套餐折扣（85-90折）', data: { priceRange: { min: 0.1, max: 200, currency: 'CNY' }, billingModels: ['CPM', 'CPC', 'per_post', 'per_sms'] } };
+      return { type: 'campaign_list', message: `【${roleLabel}视角】推荐广告套餐：`, data: campaignTemplates.map(t => ({ ...t, products: t.products.map((pid: string) => { const p = productCatalog.find(x => x.id === pid); return p ? { id: p.id, name: p.name, rate: p.rate } : null; }).filter(Boolean) })) };
+    case 'price': {
+      const buyerPrice = '【买家视角】价格说明：\n\n- 展示类（CPM）：¥25-150 / 千次曝光\n- 点击类（CPC）：¥5 / 次点击\n- 按条计费：短信 ¥0.1/条\n- 包段计费：微信推文 ¥200/篇\n\n批量投放可享受套餐折扣（85-90折）';
+      const sellerPrice = '【卖家视角】广告位定价说明：\n\n- 展示类（CPM）：报价 ¥25-150 / 千次曝光\n- 点击类（CPC）：报价 ¥5 / 次点击\n- 按条计费：短信 ¥0.1/条\n- 包段计费：微信推文 ¥200/篇\n\n批量订单可申请专属折扣';
+      return { type: 'price_info', message: role === 'buyer' ? buyerPrice : sellerPrice, data: { priceRange: { min: 0.1, max: 200, currency: 'CNY' }, billingModels: ['CPM', 'CPC', 'per_post', 'per_sms'] } };
+    }
     case 'advertiser':
-      return { type: 'advertiser_list', message: '正在投放的广告主：', data: advertisers };
-    case 'createOrder':
-      return { type: 'create_order', message: '创建投放订单\n\n请提供以下信息：\n1. 选择广告位 ID（如 prod_001）\n2. 投放预算（元）\n3. 投放开始日期\n4. 投放结束日期\n\n例如：我要投 prod_001，预算 5000 元，4月15日到4月30日', data: { requiredFields: ['productId', 'budget', 'startDate', 'endDate'] } };
+      return { type: 'advertiser_list', message: `【${roleLabel}视角】正在投放的广告主：`, data: advertisers };
+    case 'createOrder': {
+      const buyerOrder = '【买家】创建投放订单\n\n请提供以下信息：\n1. 选择广告位 ID（如 prod_001）\n2. 投放预算（元）\n3. 投放开始日期\n4. 投放结束日期\n\n例如：我要投 prod_001，预算 5000 元，4月15日到4月30日';
+      const sellerOrder = '【卖家】确认订单排期\n\n请提供以下信息：\n1. 客户订单号\n2. 广告位 ID（如 prod_001）\n3. 确认排期开始日期\n4. 确认排期结束日期\n\n例如：确认订单 prod_001，4月15日到4月30日';
+      return { type: 'create_order', message: role === 'buyer' ? buyerOrder : sellerOrder, data: { requiredFields: ['productId', 'budget', 'startDate', 'endDate'] } };
+    }
     default:
       return { type: 'fallback', message: '抱歉，我没有理解你的意图\n\n你可以试试：\n- "有什么广告位？" - 查看所有可用广告\n- "我想打手机广告" - 推荐移动端广告位\n- "有什么套餐？" - 查看推荐套餐\n- "价格多少？" - 查询报价\n- "我要下单" - 创建投放订单', data: null };
   }
@@ -134,7 +144,7 @@ export class AgentExecutor implements IAgentExecutor {
   private checkMockIntent(userText: string): { type: string; message: string; data: any } | null {
     const intent = detectIntent(userText);
     if (intent !== 'unknown') {
-      return handleIntent(userText);
+      return handleIntent(userText, this.role);
     }
     return null;
   }
