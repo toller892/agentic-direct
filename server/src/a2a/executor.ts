@@ -64,7 +64,7 @@ function detectIntent(message: string): string {
   return 'unknown';
 }
 
-function handleIntent(message: string): { type: string; message: string; data: any } {
+function handleIntent(message: string): { type: string; message: string; data: any; recommendation?: string } {
   const intent = detectIntent(message);
   switch (intent) {
     case 'hello':
@@ -97,7 +97,7 @@ function handleIntent(message: string): { type: string; message: string; data: a
       return { type: 'product_list', message: '电商类广告位：', data: ecommerceProducts };
     }
     case 'campaign':
-      return { type: 'campaign_list', message: '推荐广告套餐：', data: campaignTemplates.map(t => ({ ...t, products: t.products.map((pid: string) => { const p = productCatalog.find(x => x.id === pid); return { id: p.id, name: p.name, rate: p.rate }; }) })) };
+      return { type: 'campaign_list', message: '推荐广告套餐：', data: campaignTemplates.map(t => ({ ...t, products: t.products.map((pid: string) => { const p = productCatalog.find(x => x.id === pid); return p ? { id: p.id, name: p.name, rate: p.rate } : null; }).filter(Boolean) })) };
     case 'price':
       return { type: 'price_info', message: '价格说明：\n\n- 展示类（CPM）：¥25-150 / 千次曝光\n- 点击类（CPC）：¥5 / 次点击\n- 按条计费：短信 ¥0.1/条\n- 包段计费：微信推文 ¥200/篇\n\n批量投放可享受套餐折扣（85-90折）', data: { priceRange: { min: 0.1, max: 200, currency: 'CNY' }, billingModels: ['CPM', 'CPC', 'per_post', 'per_sms'] } };
     case 'advertiser':
