@@ -1,7 +1,11 @@
 /**
- * Agent Executor
- * AI-powered execution engine that selects and executes MCP tools
- * Implements @a2a-js/sdk AgentExecutor interface
+ * Agent Executor - LLM Driven Intent Recognition with Context Awareness
+ * 
+ * Architecture:
+ * 1. LLM analyzes user message + conversation context
+ * 2. LLM determines intent from known intents
+ * 3. LLM extracts parameters (product IDs, dates, budgets, etc.)
+ * 4. System executes the corresponding mock intent handler
  */
 
 import OpenAI from 'openai';
@@ -38,9 +42,80 @@ const advertisers = [
   { id: 'adv_005', name: '某游戏公司', industry: 'gaming' }
 ];
 
-// ==================== Intent Detection ====================
+// ==================== Intent Definitions ====================
+const intentDefinitions = [
+  {
+    key: 'hello',
+    description: '用户打招呼、问候、寻求帮助的意图',
+    examples: ['你好', 'hello', 'hi', '在吗', '帮助', 'help', '哈喽']
+  },
+  {
+    key: 'listProducts',
+    description: '用户询问有哪些广告位、广告产品、可用库存的意图',
+    examples: ['有什么广告位？', '有哪些产品？', '全部广告位', '看看都有什么广告', '列出所有广告位']
+  },
+  {
+    key: 'category',
+    description: '用户询问广告位有哪些类型分类、类型分布的意图',
+    examples: ['都是什么类型的？', '有哪些广告类型？', '按类型分都有哪些？', '这些广告位分几类？', '分类一下']
+  },
+  {
+    key: 'mobile',
+    description: '用户查询移动端广告、App广告、手机广告的意图',
+    examples: ['手机广告', '移动广告', 'App广告', '我想投手机广告', '有没有App相关的广告位']
+  },
+  {
+    key: 'video',
+    description: '用户查询视频类广告、视频前贴片、短视频广告的意图',
+    examples: ['视频广告', '视频前贴', '短视频广告', '我想投视频类的']
+  },
+  {
+    key: 'display',
+    description: '用户查询展示类广告、横幅广告、banner广告的意图',
+    examples: ['横幅广告', '展示广告', 'banner', '网页展示广告']
+  },
+  {
+    key: 'search',
+    description: '用户查询搜索类广告、关键词竞价广告的意图',
+    examples: ['搜索广告', '关键词竞价', '搜索关键词广告', '按点击付费的广告']
+  },
+  {
+    key: 'social',
+    description: '用户查询社交类广告、微信广告、公众号广告的意图',
+    examples: ['微信广告', '社交广告', '公众号广告', '社交媒体广告']
+  },
+  {
+    key: 'ecommerce',
+    description: '用户查询电商类广告、淘宝广告、京东广告的意图',
+    examples: ['电商广告', '淘宝广告', '京东广告', '购物相关广告']
+  },
+  {
+    key: 'campaign',
+    description: '用户询问广告套餐、组合套餐、推荐套餐的意图',
+    examples: ['有什么套餐？', '推荐套餐', '组合套餐', '有没有打包优惠']
+  },
+  {
+    key: 'price',
+    description: '用户询问价格、费用、报价、预算的意图',
+    examples: ['价格多少？', '报价', '费用', '预算', '多少钱', '贵不贵']
+  },
+  {
+    key: 'advertiser',
+    description: '用户询问有哪些广告主、谁在投广告的意图',
+    examples: ['广告主有哪些？', '谁在投？', '客户列表', '有哪些广告主在投放']
+  },
+  {
+    key: 'createOrder',
+    description: '用户想要下单、创建订单、投放广告的意图',
+    examples: ['我要下单', '创建订单', '我要投放', '帮我创建一个投放订单']
+  }
+];
+
+// ==================== Regex Fallback Patterns (for speed) ====================
 const intentPatterns: Record<string, RegExp[]> = {
+  hello: [/你好|hello|hi|hey|在吗|help|帮助|哈喽/i],
   listProducts: [/产品|广告位|广告产品|有什么广告|可选|available|product|inventory|有什么/i],
+  category: [/什么类型|哪些类型|什么种类|广告类型|广告种类|分类|type|category/i],
   mobile: [/手机|移动|app|mobile|wap/i],
   video: [/视频|广告片|video/i],
   display: [/横幅|banner|展示|display|网页广告/i],
@@ -50,32 +125,10 @@ const intentPatterns: Record<string, RegExp[]> = {
   campaign: [/套餐|campaign|bundle|组合|推荐/i],
   price: [/价格|多少钱|费用|cost|price|budget|报价/i],
   advertiser: [/广告主|客户|advertiser|谁在投/i],
-  createOrder: [/下单|创建|投放|create|order|campaign|我要投/i],
-  phoneAd: [/手机广告|打手机|phone.*广告|mobile.*ad|推销手机/i],
-  hello: [/你好|hello|hi|hey|在吗|help|帮助/i],
-  category: [/什么类型|哪些类型|什么种类|广告类型|广告种类|分类|type|category/i]
+  createOrder: [/下单|创建|投放|create|order|campaign|我要投/i]
 };
 
-// Semantic descriptions of each intent for LLM classification
-const intentDescriptions: Record<string, string> = {
-  hello: '用户打招呼、问候、寻求帮助，如：你好、hello、hi、在吗、帮助',
-  listProducts: '用户询问有哪些广告位、广告产品、可用的广告库存，如：有什么广告位？、有哪些产品？',
-  category: '用户询问广告位有哪些类型/分类、类型分布，如：都是什么类型的？、有哪些广告类型？、按类型分都有哪些？',
-  mobile: '用户查询移动端广告、App广告、手机广告、WAP广告',
-  video: '用户查询视频类广告、视频前贴片、短视频广告',
-  display: '用户查询展示类广告、横幅广告、banner广告、网页展示广告',
-  search: '用户查询搜索类广告、关键词竞价、搜索关键词广告',
-  social: '用户查询社交类广告、微信广告、公众号广告、社交媒体广告',
-  ecommerce: '用户查询电商类广告、淘宝广告、京东广告、购物相关广告',
-  campaign: '用户询问广告套餐、组合套餐、推荐套餐、bundle',
-  price: '用户询问价格、费用、报价、预算、多少钱',
-  advertiser: '用户询问有哪些广告主、谁在投广告、客户列表',
-  createOrder: '用户想要下单、创建订单、投放广告、创建campaign'
-};
-
-const knownIntentKeys = Object.keys(intentDescriptions);
-
-function detectIntent(message: string): string {
+function detectIntentByRegex(message: string): string {
   for (const [intent, patterns] of Object.entries(intentPatterns)) {
     for (const pattern of patterns) {
       if (pattern.test(message)) return intent;
@@ -84,30 +137,39 @@ function detectIntent(message: string): string {
   return 'unknown';
 }
 
-/**
- * Use LLM to classify user message into a known intent when regex fails.
- * Returns the matched intent key, or 'unknown' if the message is unrelated.
- */
-async function classifyIntentWithLLM(message: string, openai: OpenAI): Promise<string> {
-  try {
-    const intentList = knownIntentKeys.map(key => `- ${key}: ${intentDescriptions[key]}`).join('\n');
+// ==================== LLM Intent Classification ====================
+function buildIntentPrompt(): string {
+  const intentList = intentDefinitions.map(d => {
+    return `  - ${d.key}: ${d.description}\n    示例: ${d.examples.join('、')}`;
+  }).join('\n');
 
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `你是一个广告平台的意图分类助手。用户的消息是关于广告投放的咨询。
+  return `你是一个广告平台的意图分类助手。用户的消息是关于广告投放的咨询。
 请根据用户的话，判断他们想要做什么，并从以下意图列表中选择最匹配的一个。
 
 意图列表：
 ${intentList}
 
-如果用户的消息与广告投放完全无关（如问天气、聊政治、技术问题、数学题等），请返回 "unknown"。
+注意：
+1. 如果用户的消息可以对应到多个意图，选择最匹配的那个。
+2. 如果用户的消息与广告投放完全无关（如问天气、聊政治、技术问题、数学题等），请返回 "unknown"。
+3. 你只能返回意图列表中的一个 key，或 "unknown"，不要返回任何其他内容。`;
+}
 
-你只能返回意图列表中的一个 key，或 "unknown"，不要返回任何其他内容。`
-        },
-        { role: 'user', content: message }
+async function classifyIntentWithLLM(
+  message: string,
+  contextHistory: string,
+  openai: OpenAI
+): Promise<string> {
+  try {
+    const contextInfo = contextHistory
+      ? `之前的对话历史（帮助理解上下文）：\n${contextHistory}\n\n`
+      : '';
+
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: buildIntentPrompt() },
+        { role: 'user', content: `${contextInfo}用户当前消息：${message}` }
       ],
       temperature: 0.1,
       max_tokens: 32
@@ -115,14 +177,9 @@ ${intentList}
 
     const result = response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
 
-    // Validate the result is a known intent
-    if (knownIntentKeys.includes(result)) {
+    const knownKeys = intentDefinitions.map(d => d.key);
+    if (knownKeys.includes(result)) {
       return result;
-    }
-
-    // Sometimes LLM might return something like "unknown" with extra text
-    if (result.includes('unknown')) {
-      return 'unknown';
     }
 
     return 'unknown';
@@ -132,9 +189,14 @@ ${intentList}
   }
 }
 
-function handleIntent(message: string, role: 'buyer' | 'seller'): { type: string; message: string; data: any; recommendation?: string } {
-  const intent = detectIntent(message);
+// ==================== Intent Handler ====================
+function handleIntent(
+  intent: string,
+  message: string,
+  role: 'buyer' | 'seller'
+): { type: string; message: string; data: any; recommendation?: string } {
   const roleLabel = role === 'buyer' ? '买家' : '卖家';
+
   switch (intent) {
     case 'hello': {
       const buyerGreeting = '你好！我是广告投放助手（买家端）\n\n我可以帮你：\n- 查看可购买的广告位\n- 推荐广告套餐\n- 查询价格和预算\n- 创建投放订单\n\n请问有什么可以帮你的？';
@@ -201,6 +263,32 @@ function handleIntent(message: string, role: 'buyer' | 'seller'): { type: string
   }
 }
 
+// ==================== Context History Manager ====================
+interface ConversationEntry {
+  role: 'user' | 'agent';
+  text: string;
+  timestamp: number;
+}
+
+const contextHistory = new Map<string, ConversationEntry[]>();
+
+function getContextHistory(contextId: string): string {
+  const entries = contextHistory.get(contextId) || [];
+  return entries
+    .slice(-10) // Keep last 10 messages
+    .map(e => `${e.role === 'user' ? '用户' : 'Agent'}: ${e.text}`)
+    .join('\n');
+}
+
+function addContextEntry(contextId: string, entry: ConversationEntry) {
+  const entries = contextHistory.get(contextId) || [];
+  entries.push(entry);
+  // Keep max 20 entries to avoid growing too large
+  if (entries.length > 20) entries.splice(0, entries.length - 20);
+  contextHistory.set(contextId, entries);
+}
+
+// ==================== Agent Executor ====================
 export class AgentExecutor implements IAgentExecutor {
   private openai: OpenAI;
   private mcpServer: MCPServer;
@@ -221,25 +309,28 @@ export class AgentExecutor implements IAgentExecutor {
   }
 
   /**
-   * Check if message matches a mock intent and return mock response.
-   * First tries regex-based detection, then falls back to LLM classification.
+   * Detect intent: regex first (fast), then LLM with context (smart)
    */
-  private async checkMockIntent(userText: string, taskId: string): Promise<{ type: string; message: string; data: any } | null> {
-    // Step 1: Try regex-based intent detection (fast)
-    const regexIntent = detectIntent(userText);
+  private async detectIntent(
+    userText: string,
+    contextId: string
+  ): Promise<string> {
+    // Step 1: Regex detection (fast, no API call)
+    const regexIntent = detectIntentByRegex(userText);
     if (regexIntent !== 'unknown') {
-      return handleIntent(userText, this.role);
+      console.log(`🎯 Regex matched: "${userText}" -> ${regexIntent}`);
+      return regexIntent;
     }
 
-    // Step 2: Regex failed, use LLM to classify the intent
-    const llmIntent = await classifyIntentWithLLM(userText, this.openai);
+    // Step 2: LLM detection with context awareness
+    const contextHistory = getContextHistory(contextId);
+    const llmIntent = await classifyIntentWithLLM(userText, contextHistory, this.openai);
     if (llmIntent !== 'unknown') {
-      console.log(`🧠 LLM intent classification: "${userText}" -> ${llmIntent}`);
-      return handleIntent(userText, this.role);
+      console.log(`🧠 LLM matched: "${userText}" -> ${llmIntent}`);
+    } else {
+      console.log(`❌ No intent matched: "${userText}"`);
     }
-
-    // Step 3: Both failed, return friendly fallback
-    return null;
+    return llmIntent;
   }
 
   /**
@@ -251,94 +342,37 @@ export class AgentExecutor implements IAgentExecutor {
 
     console.log(`🤖 Agent Executor (${this.role}): Processing request`);
     console.log(`📝 User message: ${userText}`);
+    console.log(`📋 Context ID: ${contextId}`);
 
     // Mark task as active
     this.activeTasks.add(taskId);
 
     try {
-      // Check if this matches a known mock intent (regex first, then LLM fallback)
-      const mockResponse = await this.checkMockIntent(userText, taskId);
-      if (mockResponse) {
-        console.log(`🎯 Mock intent matched: ${mockResponse.type}`);
-        const finalMessage = this.createAgentMessage(
-          mockResponse.message,
-          mockResponse.data,
-          contextId,
-          taskId
-        );
+      // Step 1: Detect intent (regex → LLM with context)
+      const intent = await this.detectIntent(userText, contextId);
+
+      // Step 2: If intent is unknown, return friendly fallback
+      if (intent === 'unknown') {
+        const fallbackMessage = '抱歉，我没有理解你的意图\n\n你可以试试：\n- "有什么广告位？" - 查看所有可用广告\n- "我想打手机广告" - 推荐移动端广告位\n- "有什么套餐？" - 查看推荐套餐\n- "价格多少？" - 查询报价\n- "我要下单" - 创建投放订单';
+        const finalMessage = this.createAgentMessage(fallbackMessage, null, contextId, taskId);
         eventBus.publish(finalMessage);
         eventBus.finished();
         this.activeTasks.delete(taskId);
         return;
       }
 
-      // Both regex and LLM failed to classify - return friendly fallback
-      const fallbackMessage = '抱歉，我没有理解你的意图\n\n你可以试试：\n- "有什么广告位？" - 查看所有可用广告\n- "我想打手机广告" - 推荐移动端广告位\n- "有什么套餐？" - 查看推荐套餐\n- "价格多少？" - 查询报价\n- "我要下单" - 创建投放订单';
-      const finalFallbackMessage = this.createAgentMessage(fallbackMessage, null, contextId, taskId);
-      eventBus.publish(finalFallbackMessage);
-      eventBus.finished();
-      this.activeTasks.delete(taskId);
-      return;
+      // Step 3: Execute the matched intent
+      const result = handleIntent(intent, userText, this.role);
+      console.log(`✅ Intent executed: ${result.type}`);
 
-      // Step 1: Select appropriate tools using AI
-      const planResponse = await this.selectToolWithAI(userText);
+      // Save to context history
+      addContextEntry(contextId, { role: 'user', text: userText, timestamp: Date.now() });
+      addContextEntry(contextId, { role: 'agent', text: result.message, timestamp: Date.now() });
 
-      // Check if multi-step or single-step
-      const steps = planResponse.steps || [{ toolName: planResponse.toolName, toolParams: planResponse.toolParams }];
-
-      console.log(`📊 Execution plan: ${steps.length} step(s)`);
-
-      const results: any[] = [];
-      let previousResult: any = null;
-
-      // Execute each step sequentially
-      for (let i = 0; i < steps.length; i++) {
-        const step = steps[i];
-        console.log(`\n🔧 Step ${i + 1}/${steps.length}: ${step.toolName}`);
-
-        // Replace placeholders with actual results from previous steps
-        let params = { ...step.toolParams };
-        if (previousResult && previousResult.id) {
-          // Replace "__PREVIOUS_RESULT_ID__" placeholder with actual ID
-          for (const key in params) {
-            if (params[key] === '__PREVIOUS_RESULT_ID__') {
-              params[key] = previousResult.id;
-              console.log(`🔗 Linked ${key} to previous result ID: ${previousResult.id}`);
-            }
-          }
-        }
-
-        console.log(`📋 Parameters:`, JSON.stringify(params, null, 2));
-
-        // Execute the tool
-        const result = await this.executeTool(step.toolName, params);
-        results.push({ tool: step.toolName, result });
-        previousResult = result;
-
-        console.log(`✅ Step ${i + 1} completed`);
-
-        // Publish intermediate result for multi-step
-        if (steps.length > 1) {
-          const stepMessage = this.createAgentMessage(
-            `Step ${i + 1}/${steps.length}: Successfully executed ${step.toolName}`,
-            result,
-            contextId,
-            taskId
-          );
-          eventBus.publish(stepMessage);
-        }
-      }
-
-      console.log(`\n✅ All ${steps.length} step(s) completed successfully`);
-
-      // Step 3: Publish final summary
-      const summary = steps.length > 1
-        ? `Successfully completed ${steps.length} steps:\n${steps.map((s: any, i: number) => `${i + 1}. ${s.toolName}`).join('\n')}`
-        : `Successfully executed ${steps[0].toolName}`;
-
+      // Step 4: Publish response
       const finalMessage = this.createAgentMessage(
-        summary,
-        steps.length === 1 ? results[0].result : results,
+        result.message,
+        result.data,
         contextId,
         taskId
       );
@@ -349,7 +383,6 @@ export class AgentExecutor implements IAgentExecutor {
     } catch (error) {
       console.error(`❌ Execution failed:`, error);
 
-      // Publish error message
       const errorMessage = this.createAgentMessage(
         `Error: ${error instanceof Error ? error.message : String(error)}`,
         null,
@@ -360,7 +393,6 @@ export class AgentExecutor implements IAgentExecutor {
       eventBus.publish(errorMessage);
       eventBus.finished();
     } finally {
-      // Remove from active tasks
       this.activeTasks.delete(taskId);
     }
   }
@@ -376,114 +408,17 @@ export class AgentExecutor implements IAgentExecutor {
       return;
     }
 
-    // Remove from active tasks
     this.activeTasks.delete(taskId);
 
-    // Publish cancellation event
     const cancelMessage = this.createAgentMessage(
       'Task has been canceled',
       null,
-      '', // contextId will be set by SDK
+      '',
       taskId
     );
 
     eventBus.publish(cancelMessage);
     eventBus.finished();
-  }
-
-  /**
-   * Select tool using OpenAI
-   */
-  private async selectToolWithAI(userMessage: string): Promise<{ toolName: string; toolParams: any; steps?: Array<{ toolName: string; toolParams: any }> }> {
-    const toolsWithSchemas = this.tools.map(t => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.inputSchema.properties || {}
-    }));
-
-    const systemPrompt = `You are an AI assistant for the OpenDirect ${this.role} agent.
-Your job is to analyze user requests and determine which tools to execute.
-
-Available tools with their exact parameter names:
-${toolsWithSchemas.map(t => `
-- ${t.name}: ${t.description}
-  Parameters: ${JSON.stringify(t.parameters, null, 2)}
-`).join('\n')}
-
-IMPORTANT RULES:
-1. Use the EXACT parameter names from the tool schemas above
-2. Use entity names EXACTLY as provided by the user (do NOT add suffixes like "Account" or "Order")
-3. For multi-step workflows that need results from previous steps, use the special placeholder: "__PREVIOUS_RESULT_ID__"
-4. You must respond with a valid JSON object
-
-Example for "create account for Nike and create order for Nike with budget 500":
-{
-  "steps": [
-    {
-      "toolName": "create_account",
-      "toolParams": { "name": "Nike", "type": "advertiser" }
-    },
-    {
-      "toolName": "create_order",
-      "toolParams": { "accountId": "__PREVIOUS_RESULT_ID__", "name": "Nike", "budget": 500 }
-    }
-  ]
-}
-
-If the request requires only ONE tool, respond with this JSON format:
-{
-  "toolName": "the_tool_to_use",
-  "toolParams": { "paramName": "value" }
-}
-
-Always return valid JSON.`;
-
-    const response = await this.openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error('No response from AI');
-    }
-
-    return JSON.parse(content);
-  }
-
-  /**
-   * Execute a tool using MCP protocol
-   */
-  private async executeTool(toolName: string, params: any): Promise<any> {
-    console.log(`🔌 Calling MCP tool via protocol: ${toolName}`);
-
-    try {
-      // Execute through MCP server using protocol-compliant call
-      const response = await this.mcpServer.callTool(toolName, params);
-
-      // Extract result from MCP response
-      if (response.content && response.content.length > 0) {
-        const textContent = response.content[0];
-        if (textContent.type === 'text') {
-          // Try to parse JSON response
-          try {
-            return JSON.parse(textContent.text);
-          } catch {
-            return textContent.text;
-          }
-        }
-      }
-
-      return response;
-    } catch (error) {
-      console.error(`❌ MCP tool execution failed:`, error);
-      throw new Error(`Tool execution failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
 
   /**
