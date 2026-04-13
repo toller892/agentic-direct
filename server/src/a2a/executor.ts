@@ -189,11 +189,79 @@ async function classifyIntentWithLLM(
   }
 }
 
+// ==================== Parameter Extraction ====================
+interface OrderParams {
+  productId?: string;
+  budget?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+async function extractOrderParams(userText: string, contextHistory: string, openai: OpenAI): Promise<OrderParams> {
+  try {
+    const contextInfo = contextHistory
+      ? `之前的对话历史：\n${contextHistory}\n\n`
+      : '';
+
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `你是一个广告平台的参数提取助手。从用户的消息中提取下单所需的参数。
+
+需要提取的参数：
+- productId: 广告位 ID，格式为 prod_XXX（如 prod_001, prod_002 等）。如果用户说的是广告名称，请匹配到对应的 ID。
+- budget: 投放预算金额，数字类型（元）
+- startDate: 投放开始日期，字符串（如 "2026-04-15" 或 "4月15日"）
+- endDate: 投放结束日期，字符串（如 "2026-04-30" 或 "4月30日"）
+
+如果用户没有提供某个参数，该字段返回 null。
+只返回 JSON 对象，不要返回任何其他内容。
+
+广告位参考列表：
+prod_001: 首页横幅广告位
+prod_002: App开屏广告
+prod_003: 信息流原生广告
+prod_004: 视频前贴片广告
+prod_005: 搜索关键词竞价
+prod_006: 侧边栏展示广告
+prod_007: 短视频信息流广告
+prod_008: 微信公众号推文广告
+prod_009: 电商首页焦点图
+prod_010: 短信推广`
+        },
+        { role: 'user', content: `${contextInfo}用户消息：${userText}` }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+      max_tokens: 128
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) return {};
+
+    const parsed = JSON.parse(content);
+    const params: OrderParams = {};
+
+    if (parsed.productId) params.productId = parsed.productId;
+    if (parsed.budget) params.budget = typeof parsed.budget === 'number' ? parsed.budget : parseFloat(parsed.budget);
+    if (parsed.startDate) params.startDate = parsed.startDate;
+    if (parsed.endDate) params.endDate = parsed.endDate;
+
+    return params;
+  } catch (error) {
+    console.error('LLM parameter extraction failed:', error);
+    return {};
+  }
+}
+
 // ==================== Intent Handler ====================
 function handleIntent(
   intent: string,
   message: string,
-  role: 'buyer' | 'seller'
+  role: 'buyer' | 'seller',
+  params: Record<string, any> = {}
 ): { type: string; message: string; data: any; recommendation?: string } {
   const roleLabel = role === 'buyer' ? '买家' : '卖家';
 
@@ -254,9 +322,52 @@ function handleIntent(
     case 'advertiser':
       return { type: 'advertiser_list', message: `【${roleLabel}视角】正在投放的广告主：`, data: advertisers };
     case 'createOrder': {
+      const missingFields: string[] = [];
+      if (!params.productId) missingFields.push('广告位 ID（如 prod_001）');
+      if (!params.budget) missingFields.push('投放预算（元）');
+      if (!params.startDate) missingFields.push('投放开始日期');
+      if (!params.endDate) missingFields.push('投放结束日期');
+
+      if (missingFields.length === 0) {
+        // All params provided, simulate order creation
+        const orderId = `ORD-${Date.now().toString(36).toUpperCase()}`;
+        const product = productCatalog.find(p => p.id === params.productId);
+        const productName = product ? product.name : params.productId;
+        const estimatedImpressions = product && product.unit === 'CPM'
+          ? Math.round((params.budget / product.rate) * 1000).toLocaleString()
+          : params.budget;
+
+        const buyerConfirm = `✅ 【买家】订单创建成功！
+
+订单号：${orderId}
+广告位：${productName}（${params.productId}）
+预算：¥${params.budget.toLocaleString()}
+投放日期：${params.startDate} 至 ${params.endDate}
+
+${product ? `预估曝光量：${estimatedImpressions} 次` : ''}
+
+订单已提交，正在处理中...`;
+
+        const sellerConfirm = `✅ 【卖家】订单排期已确认
+
+订单号：${orderId}
+广告位：${productName}（${params.productId}）
+预算：¥${params.budget.toLocaleString()}
+排期日期：${params.startDate} 至 ${params.endDate}
+
+排期已确认，等待广告素材...`;
+
+        return {
+          type: 'order_created',
+          message: role === 'buyer' ? buyerConfirm : sellerConfirm,
+          data: { orderId, productId: params.productId, budget: params.budget, startDate: params.startDate, endDate: params.endDate }
+        };
+      }
+
+      // Missing fields, ask user to provide
       const buyerOrder = '【买家】创建投放订单\n\n请提供以下信息：\n1. 选择广告位 ID（如 prod_001）\n2. 投放预算（元）\n3. 投放开始日期\n4. 投放结束日期\n\n例如：我要投 prod_001，预算 5000 元，4月15日到4月30日';
       const sellerOrder = '【卖家】确认订单排期\n\n请提供以下信息：\n1. 客户订单号\n2. 广告位 ID（如 prod_001）\n3. 确认排期开始日期\n4. 确认排期结束日期\n\n例如：确认订单 prod_001，4月15日到4月30日';
-      return { type: 'create_order', message: role === 'buyer' ? buyerOrder : sellerOrder, data: { requiredFields: ['productId', 'budget', 'startDate', 'endDate'] } };
+      return { type: 'create_order', message: role === 'buyer' ? buyerOrder : sellerOrder, data: { requiredFields: missingFields } };
     }
     default:
       return { type: 'fallback', message: '抱歉，我没有理解你的意图\n\n你可以试试：\n- "有什么广告位？" - 查看所有可用广告\n- "我想打手机广告" - 推荐移动端广告位\n- "有什么套餐？" - 查看推荐套餐\n- "价格多少？" - 查询报价\n- "我要下单" - 创建投放订单', data: null };
@@ -361,8 +472,16 @@ export class AgentExecutor implements IAgentExecutor {
         return;
       }
 
-      // Step 3: Execute the matched intent
-      const result = handleIntent(intent, userText, this.role);
+      // Step 3: For intents that need parameter extraction (like createOrder), extract params first
+      let params: Record<string, any> = {};
+      if (intent === 'createOrder') {
+        const contextHist = getContextHistory(contextId);
+        params = await extractOrderParams(userText, contextHist, this.openai);
+        console.log(`📦 Extracted params:`, JSON.stringify(params));
+      }
+
+      // Step 4: Execute the matched intent with extracted params
+      const result = handleIntent(intent, userText, this.role, params);
       console.log(`✅ Intent executed: ${result.type}`);
 
       // Save to context history
