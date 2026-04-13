@@ -55,6 +55,24 @@ const intentPatterns: Record<string, RegExp[]> = {
   hello: [/你好|hello|hi|hey|在吗|help|帮助/i]
 };
 
+// Semantic descriptions of each intent for LLM classification
+const intentDescriptions: Record<string, string> = {
+  hello: '用户打招呼、问候、寻求帮助，如：你好、hello、hi、在吗、帮助',
+  listProducts: '用户询问有哪些广告位、广告产品、可用的广告库存，如：有什么广告位？、有哪些产品？',
+  mobile: '用户查询移动端广告、App广告、手机广告、WAP广告',
+  video: '用户查询视频类广告、视频前贴片、短视频广告',
+  display: '用户查询展示类广告、横幅广告、banner广告、网页展示广告',
+  search: '用户查询搜索类广告、关键词竞价、搜索关键词广告',
+  social: '用户查询社交类广告、微信广告、公众号广告、社交媒体广告',
+  ecommerce: '用户查询电商类广告、淘宝广告、京东广告、购物相关广告',
+  campaign: '用户询问广告套餐、组合套餐、推荐套餐、bundle',
+  price: '用户询问价格、费用、报价、预算、多少钱',
+  advertiser: '用户询问有哪些广告主、谁在投广告、客户列表',
+  createOrder: '用户想要下单、创建订单、投放广告、创建campaign'
+};
+
+const knownIntentKeys = Object.keys(intentDescriptions);
+
 function detectIntent(message: string): string {
   for (const [intent, patterns] of Object.entries(intentPatterns)) {
     for (const pattern of patterns) {
@@ -62,6 +80,54 @@ function detectIntent(message: string): string {
     }
   }
   return 'unknown';
+}
+
+/**
+ * Use LLM to classify user message into a known intent when regex fails.
+ * Returns the matched intent key, or 'unknown' if the message is unrelated.
+ */
+async function classifyIntentWithLLM(message: string, openai: OpenAI): Promise<string> {
+  try {
+    const intentList = knownIntentKeys.map(key => `- ${key}: ${intentDescriptions[key]}`).join('\n');
+
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `你是一个广告平台的意图分类助手。用户的消息是关于广告投放的咨询。
+请根据用户的话，判断他们想要做什么，并从以下意图列表中选择最匹配的一个。
+
+意图列表：
+${intentList}
+
+如果用户的消息与广告投放完全无关（如问天气、聊政治、技术问题、数学题等），请返回 "unknown"。
+
+你只能返回意图列表中的一个 key，或 "unknown"，不要返回任何其他内容。`
+        },
+        { role: 'user', content: message }
+      ],
+      temperature: 0.1,
+      max_tokens: 32
+    });
+
+    const result = response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
+
+    // Validate the result is a known intent
+    if (knownIntentKeys.includes(result)) {
+      return result;
+    }
+
+    // Sometimes LLM might return something like "unknown" with extra text
+    if (result.includes('unknown')) {
+      return 'unknown';
+    }
+
+    return 'unknown';
+  } catch (error) {
+    console.error('LLM intent classification failed:', error);
+    return 'unknown';
+  }
 }
 
 function handleIntent(message: string, role: 'buyer' | 'seller'): { type: string; message: string; data: any; recommendation?: string } {
@@ -139,13 +205,24 @@ export class AgentExecutor implements IAgentExecutor {
   }
 
   /**
-   * Check if message matches a mock intent and return mock response
+   * Check if message matches a mock intent and return mock response.
+   * First tries regex-based detection, then falls back to LLM classification.
    */
-  private checkMockIntent(userText: string): { type: string; message: string; data: any } | null {
-    const intent = detectIntent(userText);
-    if (intent !== 'unknown') {
+  private async checkMockIntent(userText: string, taskId: string): Promise<{ type: string; message: string; data: any } | null> {
+    // Step 1: Try regex-based intent detection (fast)
+    const regexIntent = detectIntent(userText);
+    if (regexIntent !== 'unknown') {
       return handleIntent(userText, this.role);
     }
+
+    // Step 2: Regex failed, use LLM to classify the intent
+    const llmIntent = await classifyIntentWithLLM(userText, this.openai);
+    if (llmIntent !== 'unknown') {
+      console.log(`🧠 LLM intent classification: "${userText}" -> ${llmIntent}`);
+      return handleIntent(userText, this.role);
+    }
+
+    // Step 3: Both failed, return friendly fallback
     return null;
   }
 
@@ -163,8 +240,8 @@ export class AgentExecutor implements IAgentExecutor {
     this.activeTasks.add(taskId);
 
     try {
-      // Check if this matches a known mock intent
-      const mockResponse = this.checkMockIntent(userText);
+      // Check if this matches a known mock intent (regex first, then LLM fallback)
+      const mockResponse = await this.checkMockIntent(userText, taskId);
       if (mockResponse) {
         console.log(`🎯 Mock intent matched: ${mockResponse.type}`);
         const finalMessage = this.createAgentMessage(
@@ -178,6 +255,14 @@ export class AgentExecutor implements IAgentExecutor {
         this.activeTasks.delete(taskId);
         return;
       }
+
+      // Both regex and LLM failed to classify - return friendly fallback
+      const fallbackMessage = '抱歉，我没有理解你的意图\n\n你可以试试：\n- "有什么广告位？" - 查看所有可用广告\n- "我想打手机广告" - 推荐移动端广告位\n- "有什么套餐？" - 查看推荐套餐\n- "价格多少？" - 查询报价\n- "我要下单" - 创建投放订单';
+      const finalFallbackMessage = this.createAgentMessage(fallbackMessage, null, contextId, taskId);
+      eventBus.publish(finalFallbackMessage);
+      eventBus.finished();
+      this.activeTasks.delete(taskId);
+      return;
 
       // Step 1: Select appropriate tools using AI
       const planResponse = await this.selectToolWithAI(userText);
