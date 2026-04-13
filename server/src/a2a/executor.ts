@@ -52,13 +52,15 @@ const intentPatterns: Record<string, RegExp[]> = {
   advertiser: [/广告主|客户|advertiser|谁在投/i],
   createOrder: [/下单|创建|投放|create|order|campaign|我要投/i],
   phoneAd: [/手机广告|打手机|phone.*广告|mobile.*ad|推销手机/i],
-  hello: [/你好|hello|hi|hey|在吗|help|帮助/i]
+  hello: [/你好|hello|hi|hey|在吗|help|帮助/i],
+  category: [/什么类型|哪些类型|什么种类|广告类型|广告种类|分类|type|category/i]
 };
 
 // Semantic descriptions of each intent for LLM classification
 const intentDescriptions: Record<string, string> = {
   hello: '用户打招呼、问候、寻求帮助，如：你好、hello、hi、在吗、帮助',
   listProducts: '用户询问有哪些广告位、广告产品、可用的广告库存，如：有什么广告位？、有哪些产品？',
+  category: '用户询问广告位有哪些类型/分类、类型分布，如：都是什么类型的？、有哪些广告类型？、按类型分都有哪些？',
   mobile: '用户查询移动端广告、App广告、手机广告、WAP广告',
   video: '用户查询视频类广告、视频前贴片、短视频广告',
   display: '用户查询展示类广告、横幅广告、banner广告、网页展示广告',
@@ -141,6 +143,20 @@ function handleIntent(message: string, role: 'buyer' | 'seller'): { type: string
     }
     case 'listProducts':
       return { type: 'product_list', message: `【${roleLabel}视角】我们目前有 ${productCatalog.length} 个广告位可投放：`, data: productCatalog };
+    case 'category': {
+      const categories = [
+        { type: '展示', label: 'display', count: productCatalog.filter(p => p.category === 'display').length, products: productCatalog.filter(p => p.category === 'display').map(p => p.name).join('、') },
+        { type: '移动', label: 'mobile', count: productCatalog.filter(p => p.category === 'mobile').length, products: productCatalog.filter(p => p.category === 'mobile').map(p => p.name).join('、') },
+        { type: '视频', label: 'video', count: productCatalog.filter(p => p.category === 'video').length, products: productCatalog.filter(p => p.category === 'video').map(p => p.name).join('、') },
+        { type: '信息流', label: 'feed', count: productCatalog.filter(p => p.category === 'feed').length, products: productCatalog.filter(p => p.category === 'feed').map(p => p.name).join('、') },
+        { type: '搜索', label: 'search', count: productCatalog.filter(p => p.category === 'search').length, products: productCatalog.filter(p => p.category === 'search').map(p => p.name).join('、') },
+        { type: '社交', label: 'social', count: productCatalog.filter(p => p.category === 'social').length, products: productCatalog.filter(p => p.category === 'social').map(p => p.name).join('、') },
+        { type: '电商', label: 'ecommerce', count: productCatalog.filter(p => p.category === 'ecommerce').length, products: productCatalog.filter(p => p.category === 'ecommerce').map(p => p.name).join('、') },
+        { type: '直投', label: 'direct', count: productCatalog.filter(p => p.category === 'direct').length, products: productCatalog.filter(p => p.category === 'direct').map(p => p.name).join('、') }
+      ];
+      const categoryText = categories.filter(c => c.count > 0).map(c => `${c.type}（${c.count}个）：${c.products}`).join('\n');
+      return { type: 'category_list', message: `【${roleLabel}视角】广告位类型分类：\n\n${categoryText}`, data: categories.filter(c => c.count > 0) };
+    }
     case 'phoneAd':
     case 'mobile': {
       const mobileProducts = productCatalog.filter(p => p.category === 'mobile' || p.type === 'splash' || p.description.includes('App'));
